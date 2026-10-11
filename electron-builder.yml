@@ -1,0 +1,58 @@
+appId: com.luisliu.branchchat
+productName: BranchChat
+copyright: Copyright © 2026 Luis Liu
+directories:
+  buildResources: build
+  output: release/${version}
+files:
+  - out/**/*
+  - resources/**/*
+  - package.json
+asarUnpack:
+  - resources/**
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+publish: null
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: 分支对话
+  uninstallDisplayName: 分支对话 BranchChat
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  # No signing identity in CI by default: builds are unsigned (Gatekeeper will warn)
+  identity: null
+dmg:
+  title: 分支对话 ${version}
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  icon: build/icon.png
+  category: Utility
+  executableName: branchchat
+  syncDesktopName: true
+  maintainer: Luis Liu <noreply@users.noreply.github.com>
+  synopsis: 分支对话 · 划词展开分支的 AI 对话客户端
+  description: 支持划词展开分支对话与实时对话树的 AI 桌面客户端（自带 API Key）。
+  desktop:
+    entry:
+      Name: 分支对话 BranchChat
+      Comment: AI 分支对话与对话树
+deb:
+  packageName: branchchat
