@@ -1,17 +1,24 @@
-import { app, safeStorage } from 'electron';
-import { promises as fsp, readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { safeStorage } from 'electron';
+import { promises as fsp, readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
+import { sanitizeFont } from '../shared/appearance';
+import { samePath } from '../shared/dataDir';
 import {
   DEFAULT_SETTINGS,
   emptyData,
   type AppData,
+  type DataDirKind,
+  type DataDirState,
   type KeyStorage,
   type Settings,
   type SettingsState,
   type SettingsUpdate,
 } from '../shared/types';
+import { applyNativeTheme } from './appearance';
+import { currentDataDir, setActiveDataDir, writeDataPointer } from './dataDir';
+import { removeDataFiles, transferDataFiles } from './transfer';
 
-const dir = () => app.getPath('userData');
+const dir = () => currentDataDir();
 const dataFile = () => join(dir(), 'data.json');
 const settingsFile = () => join(dir(), 'settings.json');
 const keyFile = () => join(dir(), 'apikey.bin');
@@ -59,7 +66,7 @@ export const saveDataSync = (d: AppData) => writeJsonSync(dataFile(), d);
 // ---------- settings ----------
 export function loadSettings(): Settings {
   const s = readJson<Partial<Settings>>(settingsFile(), {});
-  return { ...DEFAULT_SETTINGS, ...s };
+  return sanitizeSettings({ ...DEFAULT_SETTINGS, ...s });
 }
 
 // ---------- API key (encrypted with safeStorage) ----------
@@ -121,17 +128,67 @@ export function settingsState(): SettingsState {
 }
 
 function sanitizeSettings(s: Settings): Settings {
+  const theme = s.theme === 'light' || s.theme === 'dark' || s.theme === 'system' ? s.theme : DEFAULT_SETTINGS.theme;
   return {
     provider: s.provider === 'anthropic' ? 'anthropic' : 'openai',
     baseUrl: String(s.baseUrl ?? DEFAULT_SETTINGS.baseUrl).trim(),
     model: String(s.model ?? '').trim(),
     systemPrompt: String(s.systemPrompt ?? ''),
     temperature: Math.min(2, Math.max(0, Number(s.temperature) || 0)),
+    theme,
+    fontLatin: sanitizeFont(s.fontLatin, DEFAULT_SETTINGS.fontLatin),
+    fontCjk: sanitizeFont(s.fontCjk, DEFAULT_SETTINGS.fontCjk),
+    thinkingEffort:
+      s.thinkingEffort === 'low' || s.thinkingEffort === 'medium' || s.thinkingEffort === 'high' ? s.thinkingEffort : 'off',
   };
 }
 
 export function saveSettings(update: SettingsUpdate): SettingsState {
-  writeJsonSync(settingsFile(), sanitizeSettings(update.settings));
+  const saved = sanitizeSettings(update.settings);
+  writeJsonSync(settingsFile(), saved);
+  applyNativeTheme(saved.theme);
   if (typeof update.apiKey === 'string') setApiKey(update.apiKey.trim());
   return settingsState();
+}
+
+function asDirectory(input: string): string {
+  if (typeof input !== 'string' || !input.trim()) throw new Error('请选择文件夹');
+  const dest = resolve(input);
+  if (!isAbsolute(dest)) throw new Error('请选择一个绝对路径');
+  return dest;
+}
+
+export function inspectDataDir(input: string): DataDirKind {
+  const dest = asDirectory(input);
+  if (samePath(dest, currentDataDir())) return 'same';
+  if (!existsSync(dest)) return 'empty';
+  if (!statSync(dest).isDirectory()) throw new Error('请选择文件夹');
+  return existsSync(join(dest, 'data.json')) ? 'existing' : 'empty';
+}
+
+export function setDataDirectory(input: string, mode: 'move' | 'switch'): DataDirState {
+  const dest = asDirectory(input);
+  const from = currentDataDir();
+  const kind = inspectDataDir(dest);
+  if (kind === 'same') return { dataDir: from, data: loadData(), settings: settingsState() };
+  if (mode === 'move' && kind === 'existing') throw new Error('目标文件夹已有数据');
+  if (mode === 'switch' && kind !== 'existing') throw new Error('目标文件夹没有可切换的数据');
+  mkdirSync(dest, { recursive: true });
+  const probe = join(dest, `.write-probe-${process.pid}`);
+  writeFileSync(probe, '');
+  unlinkSync(probe);
+  let copied: string[] = [];
+  try {
+    if (mode === 'move') copied = transferDataFiles(from, dest);
+    writeDataPointer(dest);
+    setActiveDataDir(dest);
+  } catch (err) {
+    if (copied.length) removeDataFiles(dest, copied);
+    throw err;
+  }
+  if (copied.length) removeDataFiles(from, copied);
+  cachedKey = null;
+  const settings = settingsState();
+  applyNativeTheme(settings.theme);
+  return { dataDir: dest, data: loadData(), settings };
 }

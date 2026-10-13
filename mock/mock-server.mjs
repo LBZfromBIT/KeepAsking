@@ -30,6 +30,11 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { ...cors, 'content-type': 'application/json' });
     return res.end(JSON.stringify(requests));
   }
+  const path = (req.url || '').split('?')[0];
+  if (req.method === 'GET' && (path === '/v1/models' || path === '/models')) {
+    res.writeHead(200, { ...cors, 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ object: 'list', data: [{ id: 'mock-large' }, { id: 'mock-model' }] }));
+  }
   let body = '';
   for await (const c of req) body += c;
   let json = {};

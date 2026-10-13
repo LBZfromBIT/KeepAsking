@@ -27,6 +27,21 @@ app.process().stderr?.on('data', (d) => process.env.E2E_VERBOSE && process.stder
 const step = (s) => console.log('✓', s);
 console.log('userData:', userData);
 
+async function openMarkMenu(page) {
+  await page.evaluate(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) throw new Error('no selection');
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+    const el = node.closest('[data-message-id]');
+    if (!el) throw new Error('selection is outside a message');
+    el.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true, cancelable: true, clientX: rect.left + 2, clientY: rect.top + 4, button: 2,
+    }));
+  });
+  await page.waitForSelector('.branch-pop');
+}
+
 async function selectText(page, scopeSel, needle) {
   await page.evaluate(({ scopeSel, needle }) => {
     const scopes = [...document.querySelectorAll(scopeSel)];
@@ -51,7 +66,10 @@ async function selectText(page, scopeSel, needle) {
   }, { scopeSel, needle });
 }
 
-const waitIdle = () => page.waitForFunction(() => !document.querySelector('.typing') && !document.querySelector('.composer .danger'));
+const waitIdle = () =>
+  page.waitForFunction(
+    () => !document.querySelector('.thinking') && !document.querySelector('.composer .danger') && !document.querySelector('[data-testid=probe-panel] .danger'),
+  );
 const nodeCount = () => page.locator('[data-testid=tree] .tree-node').count();
 
 await page.waitForSelector('.app');
@@ -62,6 +80,7 @@ step('contextIsolation: no Node in renderer, window.api exposed');
 
 // Configure BYOK settings
 await page.click('[data-testid=open-settings]');
+await page.click('[data-testid=settings-provider]');
 await page.fill('input[name=apiKey]', 'sk-test-123');
 await page.fill('input[name=baseUrl]', `${MOCK}/v1`);
 await page.fill('input[name=model]', 'mock-model');
@@ -81,6 +100,9 @@ step('streaming root answer rendered with markdown + code highlighting');
 
 // Branch 1 via quick button
 await selectText(page, '.msg-assistant .markdown', '查询向量');
+await openMarkMenu(page);
+assert.match(await page.locator('.branch-pop').innerText(), /展开分支/);
+assert.match(await page.locator('.branch-pop').innerText(), /追问/);
 await page.click('.branch-pop button.primary');
 await page.waitForSelector('.branch-banner');
 await waitIdle();
@@ -88,31 +110,58 @@ assert.match(await page.locator('.msg-assistant .markdown').last().innerText(), 
 assert.equal(await nodeCount(), 2);
 step('branch 1 created from selection, streamed answer, tree has 2 nodes');
 
-// Nested branch 2 via follow-up question
+// Inline 追问: right-click, then the button, then a note in the small window. The main transcript stays put.
 await selectText(page, '.msg-assistant .markdown', '的应用');
-await page.click('.branch-pop button:has-text("追问")');
-await page.fill('.branch-pop input', '举个实际例子');
-await page.click('.branch-pop button[type=submit]');
-await page.waitForFunction(() => document.querySelectorAll('.crumbs .crumb').length === 3);
+await openMarkMenu(page);
+await page.click('[data-testid=ask-open]');
+await page.fill('[data-testid=probe-note]', '举个实际例子');
+await page.click('[data-testid=probe-start]');
+await page.waitForSelector('[data-testid=probe-panel] .probe-md');
 await waitIdle();
-assert.equal(await nodeCount(), 3);
-step('nested branch 2 created with follow-up question');
+const probeBox = await page.locator('[data-testid=probe-panel]').boundingBox();
+assert.ok(probeBox && probeBox.width >= 500, 'probe panel width');
+assert.ok(probeBox && probeBox.height >= 400, 'probe panel height');
+await page.mouse.move(probeBox.x + 28, probeBox.y + 14);
+await page.mouse.down();
+await page.mouse.move(probeBox.x + 140, probeBox.y + 90, { steps: 6 });
+await page.mouse.up();
+const moved = await page.locator('[data-testid=probe-panel]').boundingBox();
+assert.ok(moved && moved.x > probeBox.x + 40 && moved.y > probeBox.y + 40, 'probe panel drag');
+assert.equal(await page.locator('.crumbs .crumb').count(), 2);
+assert.equal(await nodeCount(), 2);
+assert.equal(await page.locator('mark.probe-mark').evaluate((el) => getComputedStyle(el).borderBottomStyle), 'dashed');
+step('probe stays in a window and dashes the selection');
 
-// Check the context sent to the API for the nested branch
 const reqs = await (await fetch(`${MOCK}/requests`)).json();
 const last = reqs[reqs.length - 1];
 assert.equal(last.headers.authorization, 'Bearer sk-test-123');
 assert.equal(last.body.model, 'mock-model');
 assert.equal(last.body.stream, true);
 const roles = last.body.messages.map((m) => m.role).join(',');
-assert.equal(roles, 'system,user,assistant,user,assistant,user', 'context = root history + branch1 history + new focus');
+assert.equal(roles, 'system,user,assistant,user,assistant,user', 'context = root history + branch1 history + probe focus');
 assert.match(last.body.messages[1].content, /Transformer/);
 assert.match(last.body.messages[3].content, /> 查询向量/);
 assert.match(last.body.messages[5].content, /> 的应用[\s\S]*举个实际例子/);
-step('branch context = ancestor history up to anchor + quoted selection + question');
+step('probe context = ancestor history up to anchor + quoted selection + note');
+
+await page.click('[data-testid=probe-close]');
+await page.waitForSelector('[data-testid=probe-panel]', { state: 'detached' });
+await page.click('mark.probe-mark');
+await page.waitForSelector('[data-testid=probe-panel]');
+assert.match(await page.locator('[data-testid=probe-panel]').innerText(), /举个实际例子/);
+await page.click('[data-testid=probe-close]');
+step('clicking the dashed underline reopens the same probe');
+
+await selectText(page, '.msg-assistant .markdown', '要点一');
+await openMarkMenu(page);
+await page.click('.branch-pop button.primary');
+await page.waitForFunction(() => document.querySelectorAll('.crumbs .crumb').length === 3);
+await waitIdle();
+assert.equal(await nodeCount(), 3);
+step('nested branch created from selection');
 
 // Navigate to root via tree, verify highlighted span & clicking it jumps to branch
-const rootId = await page.locator('[data-testid=tree] .tree-node').evaluateAll((els) => els.find((e) => e.textContent.includes('🌳')).dataset.nodeId);
+const rootId = await page.locator('[data-testid=tree] .tree-node').evaluateAll((els) => els.find((e) => e.dataset.root === 'true').dataset.nodeId);
 await page.click(`[data-testid=tree] .tree-node[data-node-id="${rootId}"]`);
 await page.waitForSelector('mark.branch-mark');
 assert.equal((await page.locator('mark.branch-mark').innerText()).trim(), '查询向量');
@@ -136,7 +185,7 @@ step('state persisted to userData/data.json across reload');
 await page.click(`[data-testid=tree] .tree-node[data-node-id="${rootId}"]`);
 await page.evaluate(() => (document.querySelector('.messages').scrollTop = 0));
 await selectText(page, '.msg-assistant .markdown', '多头注意力');
-await page.waitForSelector('.branch-pop');
+await openMarkMenu(page);
 await page.waitForTimeout(500);
 await page.screenshot({ path: SHOT });
 step('screenshot saved to ' + SHOT);
@@ -149,6 +198,7 @@ step('branch view screenshot saved to ' + SHOT2);
 
 // Anthropic-style provider
 await page.click('[data-testid=open-settings]');
+await page.click('[data-testid=settings-provider]');
 await page.selectOption('.modal select', 'anthropic');
 await page.click('.modal button.primary');
 await page.waitForSelector('.modal', { state: 'detached' });
@@ -162,6 +212,7 @@ assert.equal(areq.headers['x-api-key'], 'sk-test-123');
 assert.match(await page.locator('.msg-assistant .markdown').last().innerText(), /注意力机制简介/);
 step('Anthropic-style /messages streaming works');
 await page.click('[data-testid=open-settings]');
+await page.click('[data-testid=settings-provider]');
 await page.selectOption('.modal select', 'openai');
 await page.click('.modal button.primary');
 await page.waitForSelector('.modal', { state: 'detached' });

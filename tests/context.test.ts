@@ -84,6 +84,31 @@ describe('buildContext', () => {
   it('returns [] for unknown nodes', () => {
     expect(buildContext(fixture(), 'nope')).toEqual([]);
   });
+
+  it('replaces the compacted node context with the summary and later messages', () => {
+    const n = fixture();
+    n.root.compact = { summary: '用户问过 Q1，助手说明了注意力。', uptoMessageId: 'a1', createdAt: 10 };
+    n.root.messages.push(msg('u3', 'user', '继续', { createdAt: 20 }));
+    const ctx = buildContext(n, 'root');
+    expect(ctx[0].content).toContain('用户问过 Q1');
+    expect(ctx.some((m) => m.content === 'Q1')).toBe(false);
+    expect(ctx.slice(1).map((m) => m.content)).toEqual(['Q2', 'A2', '继续']);
+  });
+
+  it('keeps a message written after the cutoff when that cutoff was deleted', () => {
+    const n = fixture();
+    n.root.compact = { summary: '旧摘要', uptoMessageId: 'gone', createdAt: 10 };
+    n.root.messages = [msg('old', 'user', '旧问题', { createdAt: 1 }), msg('neu', 'user', '新问题', { createdAt: 30 })];
+    expect(buildContext(n, 'root').map((m) => m.content)).toEqual([expect.stringContaining('旧摘要'), '新问题']);
+  });
+
+  it('leaves ancestor text intact for an existing branch', () => {
+    const n = fixture();
+    n.root.compact = { summary: '整段被压缩', uptoMessageId: 'a2', createdAt: 10 };
+    const ctx = buildContext(n, 'b1');
+    expect(ctx.some((m) => m.content === 'Q1')).toBe(true);
+    expect(ctx.some((m) => m.content.includes('整段被压缩'))).toBe(false);
+  });
 });
 
 describe('tree helpers', () => {

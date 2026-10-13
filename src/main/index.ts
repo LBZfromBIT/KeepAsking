@@ -1,12 +1,13 @@
 import { app, BrowserWindow, Menu, shell } from 'electron';
 import { join } from 'node:path';
 import icon from '../../resources/icon.png?asset';
+import { applyNativeTheme, windowBackground } from './appearance';
+import { initDataDir } from './dataDir';
 import { registerIpc } from './ipc';
+import { loadSettings } from './store';
 
-// Allow tests / portable setups to redirect the data directory
-if (process.env.BRANCHCHAT_USER_DATA) app.setPath('userData', process.env.BRANCHCHAT_USER_DATA);
-
-app.setName('BranchChat');
+initDataDir();
+applyNativeTheme(loadSettings().theme);
 
 const isSafeExternal = (url: string) => /^(https?:|mailto:)/i.test(url);
 
@@ -17,8 +18,8 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     show: false,
-    title: '分支对话',
-    backgroundColor: '#f7f7f5',
+    title: '追问',
+    backgroundColor: windowBackground(),
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
@@ -76,9 +77,11 @@ if (!app.requestSingleInstanceLock()) {
         ]),
       );
     }
-    // Deny all permission requests (camera, mic, notifications...) — not needed
+    // Deny permission requests except local font enumeration, which the settings page lists.
     app.on('web-contents-created', (_e, wc) => {
-      wc.session.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+      const allowFontList = (perm: string) => perm === 'local-fonts';
+      wc.session.setPermissionCheckHandler((_wc, perm) => allowFontList(perm));
+      wc.session.setPermissionRequestHandler((_wc, perm, cb) => cb(allowFontList(perm)));
     });
     registerIpc();
     createWindow();

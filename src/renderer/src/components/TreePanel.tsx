@@ -13,8 +13,10 @@ interface Props {
 
 const W = 150;
 const H = 44;
-const GX = 28;
-const GY = 12;
+/** Horizontal gap between sibling subtrees. */
+const GAP_X = 22;
+/** Vertical gap between a node and its children. Depth grows downward. */
+const GAP_Y = 40;
 const PAD = 16;
 
 interface Laid {
@@ -30,18 +32,18 @@ export function TreePanel({ nodes, rootId, currentId, streamingIds, onSelect }: 
     const pos: Record<string, Laid> = {};
     let leaf = 0;
     const visit = (n: ChatNode, depth: number): number => {
-      const kids = childrenOf(nodes, n.id);
-      let y: number;
+      const kids = childrenOf(nodes, n.id).filter((k) => k.kind !== 'probe');
+      let x: number;
       if (!kids.length) {
-        y = leaf++ * (H + GY);
+        x = leaf++ * (W + GAP_X);
       } else {
-        const ys = kids.map((k) => visit(k, depth + 1));
-        y = (ys[0] + ys[ys.length - 1]) / 2;
+        const xs = kids.map((k) => visit(k, depth + 1));
+        x = (xs[0] + xs[xs.length - 1]) / 2;
       }
-      const l = { node: n, x: depth * (W + GX), y, depth };
+      const l = { node: n, x, y: depth * (H + GAP_Y), depth };
       laid.push(l);
       pos[n.id] = l;
-      return y;
+      return x;
     };
     const root = nodes[rootId];
     if (root) visit(root, 0);
@@ -63,35 +65,48 @@ export function TreePanel({ nodes, rootId, currentId, streamingIds, onSelect }: 
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  // Zoom out (down to 55%) so wide trees still fit the panel; beyond that, scroll
+  // Shrink (down to 55%) so a wide row of siblings still fits the panel; beyond that, scroll
   const scale = Math.min(1, Math.max(0.55, avail / width));
+  // Center a tree that is narrower than the panel. A wider one stays left-aligned and scrolls.
+  const offsetX = Math.max(0, (avail - width * scale) / 2);
 
   // Keep the current node visible
   useEffect(() => {
     const cur = laid.find((l) => l.node.id === currentId);
     const el = wrapRef.current;
     if (!cur || !el) return;
-    const cx = (cur.x + PAD) * scale;
+    const cx = offsetX + (cur.x + PAD) * scale;
     const cy = (cur.y + PAD) * scale;
-    if (cx < el.scrollLeft || cx + W > el.scrollLeft + el.clientWidth) el.scrollTo({ left: cx - 20, behavior: 'smooth' });
-    if (cy < el.scrollTop || cy + H > el.scrollTop + el.clientHeight) el.scrollTo({ top: cy - 40, behavior: 'smooth' });
-  }, [currentId, laid, scale]);
+    const nodeW = W * scale;
+    const nodeH = H * scale;
+    const next: ScrollToOptions = { behavior: 'smooth' };
+    let moved = false;
+    if (cx < el.scrollLeft || cx + nodeW > el.scrollLeft + el.clientWidth) {
+      next.left = Math.max(0, cx - 20);
+      moved = true;
+    }
+    if (cy < el.scrollTop || cy + nodeH > el.scrollTop + el.clientHeight) {
+      next.top = Math.max(0, cy - 40);
+      moved = true;
+    }
+    if (moved) el.scrollTo(next);
+  }, [currentId, laid, scale, offsetX]);
 
   return (
     <div className="tree-wrap" ref={wrapRef}>
-      <svg width={width * scale} height={height * scale} className="tree-svg" data-testid="tree">
-        <g transform={`scale(${scale}) translate(${PAD},${PAD})`}>
+      <svg width={Math.max(width * scale, avail)} height={height * scale} className="tree-svg" data-testid="tree">
+        <g transform={`translate(${offsetX},0) scale(${scale}) translate(${PAD},${PAD})`}>
           {edges.map(({ from, to }) => {
-            const x1 = from.x + W;
-            const y1 = from.y + H / 2;
-            const x2 = to.x;
-            const y2 = to.y + H / 2;
-            const mx = (x1 + x2) / 2;
+            const x1 = from.x + W / 2;
+            const y1 = from.y + H;
+            const x2 = to.x + W / 2;
+            const y2 = to.y;
+            const my = (y1 + y2) / 2;
             const on = activePath.has(to.node.id);
             return (
               <path
                 key={to.node.id}
-                d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`}
+                d={`M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`}
                 className={`tree-edge ${on ? 'on' : ''}`}
               />
             );
@@ -108,12 +123,12 @@ export function TreePanel({ nodes, rootId, currentId, streamingIds, onSelect }: 
                 className={`tree-node ${cur ? 'cur' : ''} ${on ? 'on' : ''}`}
                 onClick={() => onSelect(node.id)}
                 data-node-id={node.id}
+                data-root={node.parentId ? undefined : 'true'}
               >
                 <title>{node.anchor ? `「${node.anchor.text}」` : node.title}</title>
                 <rect width={W} height={H} rx={10} />
                 <text x={12} y={18} className="tree-title">
-                  {node.parentId ? '🌿 ' : '🌳 '}
-                  {truncate(node.title || '新对话', 11)}
+                  {truncate(node.title || '新对话', 12)}
                 </text>
                 <text x={12} y={34} className="tree-sub">
                   {count} 条消息{node.anchor ? ` · 「${truncate(node.anchor.text, 6)}」` : ''}

@@ -1,5 +1,5 @@
-appId: com.luisliu.branchchat
-productName: BranchChat
+appId: com.luisliu.keepasking
+productName: KeepAsking
 copyright: Copyright © 2026 Luis Liu
 directories:
   buildResources: build
@@ -23,8 +23,8 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
-  shortcutName: 分支对话
-  uninstallDisplayName: 分支对话 BranchChat
+  shortcutName: 追问
+  uninstallDisplayName: 追问 KeepAsking
 
 mac:
   target:
@@ -35,7 +35,7 @@ mac:
   # No signing identity in CI by default: builds are unsigned (Gatekeeper will warn)
   identity: null
 dmg:
-  title: 分支对话 ${version}
+  title: 追问 ${version}
 
 linux:
   target:
@@ -45,14 +45,14 @@ linux:
       arch: [x64]
   icon: build/icon.png
   category: Utility
-  executableName: branchchat
+  executableName: keepasking
   syncDesktopName: true
   maintainer: Luis Liu <noreply@users.noreply.github.com>
-  synopsis: 分支对话 · 划词展开分支的 AI 对话客户端
-  description: 支持划词展开分支对话与实时对话树的 AI 桌面客户端（自带 API Key）。
+  synopsis: 追问 · 划词展开分支的 AI 对话客户端
+  description: 支持划词展开分支与实时对话树的 AI 桌面客户端（自带 API Key）。
   desktop:
     entry:
-      Name: 分支对话 BranchChat
-      Comment: AI 分支对话与对话树
+      Name: 追问 KeepAsking
+      Comment: 划词展开分支的 AI 对话客户端
 deb:
-  packageName: branchchat
+  packageName: keepasking

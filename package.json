@@ -1,15 +1,19 @@
 {
-  "name": "branch-chat",
-  "productName": "BranchChat",
-  "version": "0.1.0",
-  "description": "分支对话：支持划词展开分支与实时对话树的 AI 桌面客户端（BYOK）",
+  "name": "keepasking",
+  "productName": "KeepAsking",
+  "version": "0.2.0",
+  "description": "追问（KeepAsking）：支持划词展开分支与实时对话树的 AI 桌面客户端（BYOK）",
   "main": "./out/main/index.js",
   "author": {
     "name": "Luis Liu",
     "email": "noreply@users.noreply.github.com"
   },
   "license": "MIT",
-  "homepage": "https://github.com/OWNER/branch-chat",
+  "homepage": "https://github.com/LBZfromBIT/KeepAsking",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LBZfromBIT/KeepAsking.git"
+  },
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
@@ -47,8 +51,14 @@
     "vite": "^7.3.7",
     "vitest": "^3.2.7"
   },
-  "desktopName": "branchchat.desktop",
+  "desktopName": "keepasking.desktop",
   "engines": {
     "node": ">=22.12.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true,
+    "electron-winstaller@5.4.0": true,
+    "electron@44.7.0": true
   }
 }

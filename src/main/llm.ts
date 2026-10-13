@@ -1,4 +1,17 @@
-import type { ApiMessage, Settings } from '../shared/types';
+import type { ApiMessage, ModelInfo, Provider, Settings, ThinkingEffort } from '../shared/types';
+
+function thinkingPayload(settings: Settings): Record<string, unknown> {
+  const effort: ThinkingEffort = settings.thinkingEffort;
+  if (effort !== 'low' && effort !== 'medium' && effort !== 'high') return {};
+  if (settings.provider === 'anthropic') return { output_config: { effort } };
+  return { reasoning_effort: effort };
+}
+
+function anthropicMaxTokens(effort: ThinkingEffort | undefined): number {
+  if (effort === 'high') return 16000;
+  if (effort === 'medium') return 8000;
+  return 4096;
+}
 
 /** Merge consecutive same-role messages (Anthropic requires strict alternation) */
 function normalize(msgs: ApiMessage[]): ApiMessage[] {
@@ -52,11 +65,12 @@ export async function streamChat(
       },
       body: JSON.stringify({
         model: settings.model,
-        max_tokens: 4096,
+        max_tokens: anthropicMaxTokens(settings.thinkingEffort),
         temperature: settings.temperature,
         system: settings.systemPrompt || undefined,
         messages: msgs,
         stream: true,
+        ...thinkingPayload(settings),
       }),
     });
   } else {
@@ -73,6 +87,7 @@ export async function streamChat(
         messages: all,
         temperature: settings.temperature,
         stream: true,
+        ...thinkingPayload(settings),
       }),
     });
   }
@@ -104,4 +119,69 @@ export async function streamChat(
       if (t) onDelta(t);
     }
   }
+}
+
+function readContextWindow(row: unknown): number | null {
+  if (!row || typeof row !== 'object') return null;
+  const record = row as Record<string, unknown>;
+  for (const key of ['context_window', 'context_length', 'contextWindow', 'max_context_length', 'max_model_len']) {
+    const n = Number(record[key]);
+    if (Number.isFinite(n) && n >= 1024 && n <= 10_000_000) return Math.floor(n);
+  }
+  return null;
+}
+
+/** Pull models out of OpenAI-style `{ data: [{ id }] }` or `{ models: [{ name }] }`. */
+export function parseModelCatalog(json: unknown): ModelInfo[] {
+  const record = json && typeof json === 'object' ? (json as { data?: unknown; models?: unknown }) : null;
+  const rows = Array.isArray(json) ? json : Array.isArray(record?.data) ? record.data : Array.isArray(record?.models) ? record.models : [];
+  const byId = new Map<string, number | null>();
+  for (const row of rows) {
+    const id =
+      typeof row === 'string'
+        ? row
+        : row && typeof row === 'object'
+          ? String((row as { id?: unknown }).id ?? (row as { name?: unknown }).name ?? '')
+          : '';
+    const trimmed = id.trim();
+    if (!trimmed) continue;
+    const reported = readContextWindow(row);
+    if (!byId.has(trimmed) || (reported && !byId.get(trimmed))) byId.set(trimmed, reported);
+  }
+  return [...byId.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([id, contextWindow]) => ({ id, contextWindow }));
+}
+
+export function parseModelIds(json: unknown): string[] {
+  return parseModelCatalog(json).map((m) => m.id);
+}
+
+export async function listModels(provider: Provider, baseUrl: string, apiKey: string, signal?: AbortSignal): Promise<ModelInfo[]> {
+  const base = baseUrl.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(base)) throw new Error('Base URL 必须以 http:// 或 https:// 开头');
+  const headers: Record<string, string> = { accept: 'application/json' };
+  if (provider === 'anthropic') {
+    headers['x-api-key'] = apiKey;
+    headers['anthropic-version'] = '2023-06-01';
+  } else if (apiKey) {
+    headers.authorization = `Bearer ${apiKey}`;
+  }
+  const res = await fetch(`${base}/models`, { method: 'GET', headers, signal });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = await res.text();
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`HTTP ${res.status} ${res.statusText}${detail ? `：${detail.slice(0, 300)}` : ''}`);
+  }
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    throw new Error('模型列表不是 JSON');
+  }
+  return parseModelCatalog(json);
 }

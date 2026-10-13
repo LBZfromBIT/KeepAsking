@@ -10,10 +10,19 @@ const api: BranchChatApi = {
     exportToFile: (json, name) => ipcRenderer.invoke('data:export', json, name),
     importFromFile: () => ipcRenderer.invoke('data:import'),
     openDataFolder: () => ipcRenderer.invoke('data:openFolder'),
+    getDir: () => ipcRenderer.invoke('data:getDir'),
+    chooseDir: () => ipcRenderer.invoke('data:chooseDir'),
+    inspectDir: (dir) => ipcRenderer.invoke('data:inspectDir', dir),
+    setDir: (dir, mode) => ipcRenderer.invoke('data:setDir', dir, mode),
   },
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
+    peek: () => ipcRenderer.sendSync('settings:peek'),
     save: (u) => ipcRenderer.invoke('settings:save', u),
+    applyAppearance: (theme) => ipcRenderer.invoke('appearance:apply', theme),
+  },
+  models: {
+    list: (req) => ipcRenderer.invoke('models:list', req),
   },
   chat: {
     start: (req) => ipcRenderer.invoke('chat:start', req),
