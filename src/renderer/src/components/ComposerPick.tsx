@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ThinkingEffort } from '../../../shared/types';
+import type { ModelGroup } from '../../../shared/modelCatalog';
+import type { ChatRoute, ThinkingEffort } from '../../../shared/types';
+
+export interface ModelPick {
+  model: string;
+  route: ChatRoute;
+  providerId?: string;
+}
 
 const EFFORTS: ThinkingEffort[] = ['off', 'low', 'medium', 'high'];
 const LABELS = ['关', '低', '中', '高'];
@@ -13,13 +20,15 @@ export const EFFORT_LABEL: Record<ThinkingEffort, string> = {
 
 interface Props {
   model: string;
-  models: string[];
+  route: ChatRoute;
+  providerId: string;
+  groups: ModelGroup[];
   effort: ThinkingEffort;
-  onModel: (id: string) => void;
+  onModel: (pick: ModelPick) => void;
   onEffort: (effort: ThinkingEffort) => void;
 }
 
-export function ComposerPick({ model, models, effort, onModel, onEffort }: Props) {
+export function ComposerPick({ model, route, providerId, groups, effort, onModel, onEffort }: Props) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const index = Math.max(0, EFFORTS.indexOf(effort));
@@ -90,21 +99,31 @@ export function ComposerPick({ model, models, effort, onModel, onEffort }: Props
       </div>
       {open && (
         <div className="pick-menu" role="listbox" aria-label="模型" data-testid="composer-model-list">
-          {models.map((id) => (
-            <button
-              type="button"
-              key={id}
-              role="option"
-              aria-selected={id === model}
-              className={id === model ? 'active' : ''}
-              onClick={() => {
-                onModel(id);
-                setOpen(false);
-              }}
-            >
-              {id}
-            </button>
+          {groups.map((group) => (
+            <div className="pick-group" key={group.id}>
+              <div className="pick-group-label">{group.label}</div>
+              {group.models.length === 0 && <p className="hint">尚未拉取模型</p>}
+              {group.models.map((id) => {
+                const selected = id === model && group.route === route && (group.route !== 'api' || group.providerId === providerId);
+                return (
+                  <button
+                    type="button"
+                    key={`${group.id}:${id}`}
+                    role="option"
+                    aria-selected={selected}
+                    className={selected ? 'active' : ''}
+                    onClick={() => {
+                      onModel({ model: id, route: group.route, providerId: group.providerId });
+                      setOpen(false);
+                    }}
+                  >
+                    {id}
+                  </button>
+                );
+              })}
+            </div>
           ))}
+          {!groups.length && <p className="hint">还没有模型。在设置里添加提供商或拉取本地 CLI 的模型。</p>}
         </div>
       )}
     </div>

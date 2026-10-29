@@ -29,13 +29,17 @@ describe('transferDataFiles', () => {
     dirs.push(from, to);
     writeFileSync(join(from, 'data.json'), '{"version":1}');
     writeFileSync(join(from, 'settings.json'), '{}');
+    writeFileSync(join(from, 'apikey.bin'), 'legacy');
+    writeFileSync(join(from, 'provider-keys.bin'), 'accounts');
     writeFileSync(join(from, 'location.json'), '{"dataDir":"nope"}');
     const copied = transferDataFiles(from, to);
-    expect(copied).toEqual(['data.json', 'settings.json']);
+    expect(copied).toEqual(['data.json', 'settings.json', 'apikey.bin', 'provider-keys.bin']);
     expect(readFileSync(join(to, 'data.json'), 'utf8')).toBe('{"version":1}');
+    expect(readFileSync(join(to, 'provider-keys.bin'), 'utf8')).toBe('accounts');
     expect(() => readFileSync(join(to, 'location.json'))).toThrow();
     removeDataFiles(from, copied);
     expect(() => readFileSync(join(from, 'data.json'))).toThrow();
+    expect(() => readFileSync(join(from, 'provider-keys.bin'))).toThrow();
     expect(readFileSync(join(from, 'location.json'), 'utf8')).toContain('nope');
   });
 });

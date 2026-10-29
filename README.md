@@ -13,11 +13,13 @@
 - **对话树**：右侧 SVG 树从上到下展开。当前节点和路径高亮，流式生成中的节点有提示，点击即可切换。
 - **输入栏**：模型和思考力度（关 / 低 / 中 / 高）是一枚标签，上下文占用是另一枚。占用明细里可以「压缩上下文」：之后发给模型的内容换成摘要，界面上的原文和已有分支保持原样。
 - **阅读长对话**：模型还没返回文字时显示 Thinking。同一节点有多轮用户消息时，右侧出现刻度，悬停看缩略，点击滚到对应位置。
-- **设置**：一般（白天 / 黑暗 / 跟随系统，以及数据目录）、字体（中英文字体列表，可搜索）、提供商（BYOK，并可拉取模型列表）。
+- **设置**：一般（白天 / 黑暗 / 跟随系统，以及数据目录）、字体（中英文字体列表，可搜索）、提供商（可保存多个云端接口，也可拉取本地 CLI 的模型）。
 - **BYOK 多服务商**：OpenAI 兼容接口（OpenAI、DeepSeek、OpenRouter、xAI、Ollama 等）与 Anthropic 接口，均为流式输出。请求由主进程发出，没有浏览器 CORS 限制。
 - **安全存储 Key**：API Key 使用 Electron `safeStorage` 加密（macOS 钥匙串 / Windows DPAPI / Linux libsecret 或 KWallet）。渲染进程只知道「是否已保存」，拿不到明文。
 - **本地数据**：会话保存在用户数据目录的 `data.json`，可用系统对话框导出 / 导入 JSON。
-- Markdown 渲染、代码高亮、停止生成、重新生成、多会话管理、中文界面。
+- Markdown 渲染、LaTeX 公式、代码高亮、停止生成、重新生成、多会话管理、中文界面。
+- **模型列表**：输入栏的模型菜单把云端模型和本地 CLI 的模型放在一起。选中云端模型就用对应接口；选中 Claude Code、Codex 或 Grok 的模型就由该命令完成对话，登录状态沿用命令自己的配置。追问只读取模型名和是否已登录，不把 CLI 的登录文件或密钥送进界面。
+- **上传文件**：输入栏可以附加文本文件，内容会跟这条消息一起发送。
 
 ## 🚀 开发
 
@@ -35,7 +37,7 @@ npm run dev          # 开发模式（渲染进程热更新）
 | `npm run dev` | 启动开发模式 |
 | `npm run start` | 以生产构建预览运行 |
 | `npm run typecheck` | 主进程 / 预加载 / 渲染进程的 TypeScript 类型检查 |
-| `npm test` | 单元测试（vitest：上下文、用量、字体、数据目录、SSE 流解析） |
+| `npm test` | 单元测试（vitest：上下文、用量、公式、字体、数据目录、本地 CLI、附件、SSE 流解析） |
 | `npm run build` | 类型检查 + 构建到 `out/` |
 | `npm run mock` | 启动本地模拟 LLM 服务 `http://127.0.0.1:8787/v1`（OpenAI + Anthropic 流式） |
 | `npm run test:e2e` | 端到端测试：用 Playwright 驱动真实 Electron 应用（需先 `build` 和 `mock`；Linux 无桌面用 `xvfb-run -a`） |
@@ -50,14 +52,16 @@ npm run dev          # 开发模式（渲染进程热更新）
 ├── src
 │   ├── main/            # 主进程（Node）
 │   │   ├── index.ts     #   窗口、安全策略、外链、单实例
-│   │   ├── ipc.ts       #   IPC：数据、设置、聊天流、文件对话框、模型列表
+│   │   ├── ipc.ts       #   IPC：数据、设置、聊天流、文件对话框、模型列表、本地 CLI
 │   │   ├── llm.ts       #   OpenAI 兼容 / Anthropic 流式请求与 SSE 解析
-│   │   ├── store.ts     #   data.json / settings.json / apikey.bin（safeStorage）
+│   │   ├── cli.ts       #   只读调用本机 Claude Code、Codex、Grok
+│   │   ├── files.ts     #   选择并读取文本附件
+│   │   ├── store.ts     #   data.json / settings.json / 加密的 Key（safeStorage）
 │   │   ├── dataDir.ts   #   数据目录；默认目录中的 location.json 指向实际位置
-│   │   ├── transfer.ts  #   搬迁 data.json、settings.json、apikey.bin
+│   │   ├── transfer.ts  #   搬迁会话、设置和加密 Key，不搬 location.json
 │   │   └── appearance.ts
 │   ├── preload/         # contextBridge 暴露 window.api
-│   ├── shared/          # 类型、上下文、用量估算、字体、外观、数据目录纯逻辑
+│   ├── shared/          # 类型、上下文、用量、公式、模型目录、字体、外观、数据目录纯逻辑
 │   └── renderer/        # 渲染进程（React）
 │       ├── index.html   #   含 CSP
 │       └── src/
@@ -65,7 +69,7 @@ npm run dev          # 开发模式（渲染进程热更新）
 │           ├── chatClient.ts      # 通过 IPC 的流式调用
 │           ├── markdown.ts        # Markdown、分支与追问的原文标记
 │           └── components/        # MessageView、ProbePanel、TreePanel、TurnRail、
-│                                  # ComposerPick、ContextUsage、Thinking、SettingsModal
+│                                  # ComposerPick、ContextUsage、Thinking、SettingsModal、CliSettings
 ├── tests/               # vitest 单元测试 + e2e.mjs
 ├── mock/                # 模拟 LLM SSE 服务
 ├── resources/           # 运行时资源（窗口图标、图标源 SVG）
@@ -84,7 +88,7 @@ npm run dev          # 开发模式（渲染进程热更新）
 | macOS | `~/Library/Application Support/KeepAsking` |
 | Linux | `~/.config/KeepAsking` |
 
-其中 `data.json` 是全部会话，`settings.json` 是非敏感设置，`apikey.bin` 是加密后的 Key。可在「设置 → 一般 → 数据目录」更改位置；默认目录里的 `location.json` 只记录新位置。0.1.0 使用的 `BranchChat` 目录不会自动迁过来，需要自行复制这三个文件。
+其中 `data.json` 是全部会话，`settings.json` 是非敏感设置。`apikey.bin` 是当前云端接口的加密 Key，`provider-keys.bin` 是其余已保存接口的加密 Key。在「设置 → 一般 → 数据目录」更改位置时，这四个文件会一起转移，密钥不会留在旧目录。默认目录里的 `location.json` 只记录新位置，不会被拷走。0.1.0 使用的 `BranchChat` 目录不会自动迁过来。
 
 ## 🧩 如何添加新功能
 

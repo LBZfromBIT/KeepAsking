@@ -1,8 +1,24 @@
 import { DEFAULT_FONT_CJK, DEFAULT_FONT_LATIN, type ThemeMode } from './appearance';
+import type { ChatRoute, CliId } from './cli';
+import type { FileAttachment } from './files';
+
+export type { ChatRoute, CliId } from './cli';
+export type { FileAttachment } from './files';
 
 export type { ThemeMode };
 export type Provider = 'openai' | 'anthropic';
 export type ThinkingEffort = 'off' | 'low' | 'medium' | 'high';
+
+/** One saved cloud endpoint. The API key lives outside this object. */
+export interface CloudAccount {
+  id: string;
+  label: string;
+  provider: Provider;
+  baseUrl: string;
+  model: string;
+  /** Models last returned by「拉取模型」. */
+  models: string[];
+}
 
 export interface Message {
   id: string;
@@ -10,6 +26,8 @@ export interface Message {
   content: string;
   /** For the first user message of a branch: the selected text the branch focuses on */
   quote?: string;
+  /** Text files the user attached to this message. */
+  files?: FileAttachment[];
   status?: 'streaming' | 'done' | 'error';
   error?: string;
   createdAt: number;
@@ -66,6 +84,13 @@ export interface Settings {
   fontCjk: string;
   /** How much reasoning to request. `off` sends no extra parameter. */
   thinkingEffort: ThinkingEffort;
+  /** `api` uses `activeProviderId`. A CLI id sends the turn through that local command. */
+  route: ChatRoute;
+  /** Saved cloud endpoints. The top-level provider fields mirror the active one. */
+  accounts: CloudAccount[];
+  activeProviderId: string;
+  /** Models last pulled from each local CLI. */
+  cliModels: Partial<Record<CliId, string[]>>;
 }
 
 export interface ModelInfo {
@@ -77,8 +102,10 @@ export interface ModelInfo {
 export interface ModelListRequest {
   provider: Provider;
   baseUrl: string;
-  /** undefined = use the saved key, '' = no key */
+  /** undefined = use the saved key for `accountId`, '' = no key */
   apiKey?: string;
+  /** Which saved cloud account's key to use when `apiKey` is omitted. */
+  accountId?: string;
 }
 
 /** How the API key is protected on disk */
@@ -86,14 +113,19 @@ export type KeyStorage = 'os' | 'basic_text' | 'unavailable';
 
 /** What the renderer sees: never the key itself */
 export interface SettingsState extends Settings {
+  /** Whether the active cloud account has a saved key. */
   hasApiKey: boolean;
   keyStorage: KeyStorage;
+  /** Account id → whether a key is saved. Values are booleans, never the key. */
+  accountKeys: Record<string, boolean>;
 }
 
 export interface SettingsUpdate {
   settings: Settings;
-  /** undefined = keep current key, '' = clear, otherwise replace */
+  /** undefined = keep the active account's key, '' = clear it, otherwise replace it. */
   apiKey?: string;
+  /** Keys for accounts other than the one covered by `apiKey`. '' clears. */
+  apiKeys?: Record<string, string>;
 }
 
 export interface AppData {
@@ -114,6 +146,19 @@ export interface ChatRequest {
   messages: ApiMessage[];
   /** `compact` summarizes the messages. It does not use the saved system prompt or reasoning effort. */
   purpose?: 'chat' | 'compact';
+  /** Ignored for `compact`, which always uses the API provider. */
+  route?: ChatRoute;
+}
+
+export interface CliInfo {
+  id: 'claude' | 'codex' | 'grok';
+  label: string;
+  installed: boolean;
+  version: string;
+  command: string;
+  model: string;
+  signedIn: boolean;
+  detail: string;
 }
 
 export type DataDirKind = 'same' | 'empty' | 'existing';
@@ -155,6 +200,17 @@ export interface BranchChatApi {
   models: {
     list(req: ModelListRequest): Promise<ModelInfo[]>;
   };
+  cli: {
+    list(): Promise<CliInfo[]>;
+    /** Ask the local command for its model ids. The key never leaves the main process. */
+    models(id: CliId): Promise<string[]>;
+    /** Model id → context window, from the local CLI catalog. */
+    windows(): Promise<Record<string, number>>;
+  };
+  files: {
+    /** Opens a file dialog and returns the text of the chosen files. `null` if cancelled. */
+    pick(): Promise<FileAttachment[] | null>;
+  };
   chat: {
     start(req: ChatRequest): Promise<void>;
     abort(requestId: string): void;
@@ -172,6 +228,10 @@ export const DEFAULT_SETTINGS: Settings = {
   fontLatin: DEFAULT_FONT_LATIN,
   fontCjk: DEFAULT_FONT_CJK,
   thinkingEffort: 'off',
+  route: 'api',
+  accounts: [],
+  activeProviderId: '',
+  cliModels: {},
 };
 
 export function toSettings(s: Settings): Settings {
@@ -185,6 +245,10 @@ export function toSettings(s: Settings): Settings {
     fontLatin: s.fontLatin,
     fontCjk: s.fontCjk,
     thinkingEffort: s.thinkingEffort,
+    route: s.route === 'claude' || s.route === 'codex' || s.route === 'grok' ? s.route : 'api',
+    accounts: s.accounts,
+    activeProviderId: s.activeProviderId,
+    cliModels: s.cliModels,
   };
 }
 

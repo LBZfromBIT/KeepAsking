@@ -1,11 +1,14 @@
 import { BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
+import { asRoute, formatCliPrompt } from '../shared/cli';
 import { COMPACT_SYSTEM } from '../shared/context';
 import type { AppData, ChatEvent, ChatRequest, ModelListRequest, SettingsUpdate, ThemeMode } from '../shared/types';
 import { applyNativeTheme } from './appearance';
+import { listClis, listCliModels, listCliWindows, streamCli } from './cli';
 import { currentDataDir } from './dataDir';
+import { pickTextFiles } from './files';
 import { listModels, streamChat } from './llm';
-import { getApiKey, inspectDataDir, loadData, loadSettings, saveData, saveDataSync, saveSettings, setDataDirectory, settingsState } from './store';
+import { getApiKey, getApiKeyFor, inspectDataDir, loadData, loadSettings, saveData, saveDataSync, saveSettings, setDataDirectory, settingsState } from './store';
 
 const controllers = new Map<string, AbortController>();
 
@@ -80,7 +83,7 @@ export function registerIpc() {
   ipcMain.handle('models:list', async (_e, req: ModelListRequest) => {
     const provider = req?.provider === 'anthropic' ? 'anthropic' : 'openai';
     const baseUrl = String(req?.baseUrl ?? '');
-    const apiKey = typeof req?.apiKey === 'string' ? req.apiKey.trim() : getApiKey();
+    const apiKey = typeof req?.apiKey === 'string' ? req.apiKey.trim() : getApiKeyFor(req?.accountId);
     if (!apiKey && !/localhost|127\.0\.0\.1/.test(baseUrl)) throw new Error('请先填写 API Key');
     try {
       return await listModels(provider, baseUrl, apiKey);
@@ -91,6 +94,14 @@ export function registerIpc() {
       throw new Error(msg);
     }
   });
+
+  ipcMain.handle('cli:list', () => listClis());
+  ipcMain.handle('cli:models', (_e, id: unknown) => {
+    if (id !== 'claude' && id !== 'codex' && id !== 'grok') throw new Error('未知的本地 CLI');
+    return listCliModels(id);
+  });
+  ipcMain.handle('cli:windows', () => listCliWindows());
+  ipcMain.handle('files:pick', (e) => pickTextFiles(BrowserWindow.fromWebContents(e.sender)));
 
   ipcMain.handle('chat:start', (e, req: ChatRequest) => {
     const body = req ?? ({} as ChatRequest);
@@ -106,11 +117,25 @@ export function registerIpc() {
       .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
       .map((m) => ({ role: m.role, content: String(m.content ?? '') }));
     const saved = loadSettings();
-    const settings = body.purpose === 'compact'
-      ? { ...saved, systemPrompt: COMPACT_SYSTEM, thinkingEffort: 'off' as const, temperature: 0.2 }
-      : saved;
+    const account = saved.accounts.find((item) => item.id === saved.activeProviderId) ?? saved.accounts[0];
+    const compact = body.purpose === 'compact';
+    const settings = compact
+      ? {
+          ...saved,
+          provider: account?.provider ?? saved.provider,
+          baseUrl: account?.baseUrl ?? saved.baseUrl,
+          model: account?.model || (saved.route === 'api' ? saved.model : ''),
+          systemPrompt: COMPACT_SYSTEM,
+          thinkingEffort: 'off' as const,
+          temperature: 0.2,
+        }
+      : { ...saved, provider: account?.provider ?? saved.provider, baseUrl: account?.baseUrl ?? saved.baseUrl };
+    const route = compact ? 'api' : asRoute(body.route ?? saved.route);
+    const run = route === 'api'
+      ? streamChat(settings, getApiKey(), clean, (text) => send({ requestId, type: 'delta', text }), ac.signal)
+      : streamCli(route, formatCliPrompt(settings.systemPrompt, clean), saved.model, (text) => send({ requestId, type: 'delta', text }), ac.signal);
     // Fire and forget: progress is reported through chat:event
-    void streamChat(settings, getApiKey(), clean, (text) => send({ requestId, type: 'delta', text }), ac.signal)
+    void run
       .then(() => send({ requestId, type: 'done' }))
       .catch((err: unknown) => {
         const aborted = ac.signal.aborted;

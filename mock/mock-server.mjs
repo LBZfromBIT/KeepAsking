@@ -13,6 +13,7 @@ const cors = {
 
 function answerFor(messages) {
   const last = messages[messages.length - 1]?.content ?? '';
+  if (last.includes('LATEXCHECK')) return '质能方程是 $E=mc^2$。\n\n$$\\int_a^b x^2\\,dx$$';
   const quote = /> (.+)/.exec(last)?.[1];
   if (quote) {
     return `## 关于「${quote}」\n\n这是针对**${quote}**的分支解释（模拟回答）。上下文中共有 ${messages.length} 条消息。\n\n- 要点一：${quote} 的定义\n- 要点二：${quote} 的应用\n\n\`\`\`python\nprint("${quote}")\n\`\`\``;

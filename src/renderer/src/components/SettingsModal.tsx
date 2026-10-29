@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { sanitizeFont } from '../../../shared/appearance';
 import { fontChoices } from '../../../shared/fonts';
-import type { Provider, Settings, SettingsState, SettingsUpdate, ThemeMode } from '../../../shared/types';
+import type { CloudAccount, Provider, Settings, SettingsState, SettingsUpdate, ThemeMode } from '../../../shared/types';
+import type { CliId } from '../../../shared/cli';
+import { CliSettings } from './CliSettings';
 
 interface Props {
   settings: SettingsState;
@@ -33,9 +35,11 @@ const STORAGE_NOTE: Record<SettingsState['keyStorage'], string> = {
 };
 
 type Page = 'general' | 'personal' | 'provider';
+type ProviderView = 'network' | 'cli';
 
 export function SettingsModal({ settings, onSave, onClose, onPreview, onRelocate }: Props) {
   const [page, setPage] = useState<Page>('general');
+  const [providerView, setProviderView] = useState<ProviderView>(settings.route === 'api' ? 'network' : 'cli');
   const [s, setS] = useState<Settings>({
     provider: settings.provider,
     baseUrl: settings.baseUrl,
@@ -46,12 +50,16 @@ export function SettingsModal({ settings, onSave, onClose, onPreview, onRelocate
     fontLatin: settings.fontLatin,
     fontCjk: settings.fontCjk,
     thinkingEffort: settings.thinkingEffort,
+    route: settings.route,
+    accounts: settings.accounts,
+    activeProviderId: settings.activeProviderId,
+    cliModels: settings.cliModels,
   });
+  const [accountId, setAccountId] = useState(settings.activeProviderId || settings.accounts[0]?.id || 'default');
   const [installedFonts, setInstalledFonts] = useState<string[]>([]);
   const [key, setKey] = useState('');
   const [clearKey, setClearKey] = useState(false);
   const [show, setShow] = useState(false);
-  const [models, setModels] = useState<string[] | null>(null);
   const [modelsError, setModelsError] = useState('');
   const [listing, setListing] = useState(false);
   const [dataDir, setDataDir] = useState('');
@@ -117,22 +125,108 @@ export function SettingsModal({ settings, onSave, onClose, onPreview, onRelocate
     };
   }, []);
 
-  const save = () => onSave({ settings: s, apiKey: clearKey ? '' : key.trim() ? key.trim() : undefined });
+  const account = s.accounts.find((item) => item.id === accountId) ?? s.accounts[0];
+
+  const patchAccount = (id: string, patch: Partial<CloudAccount>) => {
+    setS((prev) => {
+      const accounts = prev.accounts.map((item) => (item.id === id ? { ...item, ...patch } : item));
+      const active = accounts.find((item) => item.id === prev.activeProviderId) ?? accounts[0];
+      if (!active) return { ...prev, accounts };
+      return {
+        ...prev,
+        accounts,
+        provider: active.provider,
+        baseUrl: active.baseUrl,
+        model: prev.route === 'api' ? active.model : prev.model,
+        activeProviderId: active.id,
+      };
+    });
+  };
+
+  const selectAccount = (id: string) => {
+    setAccountId(id);
+    setKey('');
+    setClearKey(false);
+    setShow(false);
+    setModelsError('');
+  };
+
+  const addAccount = () => {
+    const id = `p${Date.now().toString(36)}`;
+    setS((prev) => ({
+      ...prev,
+      accounts: [...prev.accounts, { id, label: '新提供商', provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: '', models: [] }],
+    }));
+    selectAccount(id);
+  };
+
+  const removeAccount = (id: string) => {
+    const index = s.accounts.findIndex((item) => item.id === id);
+    if (index < 0) return;
+    const accounts = s.accounts.filter((item) => item.id !== id);
+    if (!accounts.length) {
+      setAccountId('');
+      setKey('');
+      setClearKey(false);
+      setShow(false);
+      setModelsError('');
+      setS((prev) => ({
+        ...prev,
+        accounts,
+        activeProviderId: '',
+        model: prev.route === 'api' ? '' : prev.model,
+      }));
+      return;
+    }
+    const active = accounts.find((item) => item.id === s.activeProviderId) ?? accounts[Math.min(index, accounts.length - 1)];
+    const stillSelected = accounts.some((item) => item.id === accountId);
+    setS((prev) => ({
+      ...prev,
+      accounts,
+      activeProviderId: active.id,
+      provider: active.provider,
+      baseUrl: active.baseUrl,
+      model: prev.route === 'api' ? active.model : prev.model,
+    }));
+    if (!stillSelected) selectAccount(active.id);
+  };
+
+  const useAccount = () => {
+    if (!account) return;
+    setS((prev) => ({
+      ...prev,
+      route: 'api',
+      activeProviderId: account.id,
+      provider: account.provider,
+      baseUrl: account.baseUrl,
+      model: account.model,
+    }));
+    setProviderView('network');
+  };
+
+  const save = () => {
+    const draft = clearKey ? '' : key.trim() ? key.trim() : undefined;
+    const update: SettingsUpdate = { settings: s };
+    if (account && account.id === s.activeProviderId) update.apiKey = draft;
+    else if (account && draft !== undefined) update.apiKeys = { [account.id]: draft };
+    onSave(update);
+  };
 
   const pullModels = async () => {
+    if (!account) return;
     setListing(true);
     setModelsError('');
     try {
       const listed = await window.api.models.list({
-        provider: s.provider,
-        baseUrl: s.baseUrl,
+        provider: account.provider,
+        baseUrl: account.baseUrl,
+        accountId: account.id,
         apiKey: clearKey ? '' : key.trim() ? key.trim() : undefined,
       });
       const ids = listed.map((m) => m.id);
-      setModels(ids);
+      patchAccount(account.id, { models: ids, model: account.model || ids[0] || '' });
       if (!ids.length) setModelsError('接口没有返回模型');
     } catch (e: unknown) {
-      setModels(null);
       const msg = e instanceof Error ? e.message : String(e);
       setModelsError(msg.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
     } finally {
@@ -223,20 +317,87 @@ export function SettingsModal({ settings, onSave, onClose, onPreview, onRelocate
                   <div>追问，划选文字，展开一支新的探索。</div>
                 </div>
               </>
-            ) : (
+            ) : page === 'provider' ? (
+              <>
+                <div className="source-switch" role="radiogroup" aria-label="提供商来源">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={providerView === 'network'}
+                    className={providerView === 'network' ? 'active' : ''}
+                    data-testid="settings-network"
+                    onClick={() => {
+                      setProviderView('network');
+                      setS((prev) => {
+                        const active = prev.accounts.find((item) => item.id === prev.activeProviderId) ?? prev.accounts[0];
+                        return {
+                          ...prev,
+                          route: 'api',
+                          provider: active?.provider ?? prev.provider,
+                          baseUrl: active?.baseUrl ?? prev.baseUrl,
+                          model: active?.model ?? '',
+                        };
+                      });
+                    }}
+                  >
+                    网络提供商
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={providerView === 'cli'}
+                    className={providerView === 'cli' ? 'active' : ''}
+                    data-testid="settings-cli"
+                    onClick={() => setProviderView('cli')}
+                  >
+                    本地 CLI
+                  </button>
+                </div>
+                {providerView === 'cli' ? (
+                  <CliSettings
+                    route={s.route}
+                    model={s.model}
+                    cliModels={s.cliModels}
+                    onPick={(id, model) => setS((prev) => ({ ...prev, route: id, model }))}
+                    onModels={(id: CliId, models) => setS((prev) => ({ ...prev, cliModels: { ...prev.cliModels, [id]: models } }))}
+                  />
+                ) : (
+              <>
+                <div className="account-bar">
+                  {s.accounts.map((item) => (
+                    <span className="account-chip" key={item.id}>
+                      <button
+                        type="button"
+                        className={`chip ${item.id === account?.id ? 'active' : ''}`}
+                        onClick={() => selectAccount(item.id)}
+                      >
+                        {item.label || '未命名'}{item.id === s.activeProviderId ? ' · 当前' : ''}
+                      </button>
+                      <button
+                        type="button"
+                        className="account-x"
+                        aria-label={`删除${item.label || '提供商'}`}
+                        onClick={() => removeAccount(item.id)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  <button type="button" className="chip" onClick={addAccount}>添加</button>
+                </div>
+                {account ? (
               <>
                 <p className="hint">
-                  请求由本机应用的主进程直接发往你填写的 API 地址，不经过任何第三方服务器。{STORAGE_NOTE[settings.keyStorage]}
+                  可以保存多个云端接口。请求由本机应用的主进程直接发出，不经过任何第三方服务器。{STORAGE_NOTE[settings.keyStorage]}
                 </p>
                 <div className="presets">
                   {PRESETS.map((p) => (
                     <button
                       type="button"
                       key={p.label}
-                      className={`chip ${s.baseUrl === p.baseUrl && s.provider === p.provider ? 'active' : ''}`}
+                      className={`chip ${account.baseUrl === p.baseUrl && account.provider === p.provider ? 'active' : ''}`}
                       onClick={() => {
-                        setS((prev) => ({ ...prev, provider: p.provider, baseUrl: p.baseUrl, model: p.model }));
-                        setModels(null);
+                        patchAccount(account.id, { label: p.label, provider: p.provider, baseUrl: p.baseUrl, model: p.model, models: [] });
                         setModelsError('');
                       }}
                     >
@@ -245,12 +406,15 @@ export function SettingsModal({ settings, onSave, onClose, onPreview, onRelocate
                   ))}
                 </div>
                 <label>
+                  名称
+                  <input value={account.label} onChange={(e) => patchAccount(account.id, { label: e.target.value })} />
+                </label>
+                <label>
                   接口协议
                   <select
-                    value={s.provider}
+                    value={account.provider}
                     onChange={(e) => {
-                      set('provider', e.target.value as Provider);
-                      setModels(null);
+                      patchAccount(account.id, { provider: e.target.value as Provider, models: [] });
                       setModelsError('');
                     }}
                   >
@@ -260,7 +424,7 @@ export function SettingsModal({ settings, onSave, onClose, onPreview, onRelocate
                 </label>
                 <label>
                   <span>
-                    API Key {settings.hasApiKey && !clearKey && <span className="ok-tag">已保存</span>}
+                    API Key {settings.accountKeys[account.id] && !clearKey && <span className="ok-tag">已保存</span>}
                   </span>
                   <div className="row">
                     <input
@@ -269,13 +433,13 @@ export function SettingsModal({ settings, onSave, onClose, onPreview, onRelocate
                       value={key}
                       disabled={clearKey}
                       onChange={(e) => setKey(e.target.value)}
-                      placeholder={settings.hasApiKey ? '已保存（留空则保持不变）' : 'sk-...'}
+                      placeholder={settings.accountKeys[account.id] ? '已保存（留空则保持不变）' : 'sk-...'}
                       autoComplete="off"
                     />
                     <button type="button" className="sm" onClick={() => setShow(!show)}>
                       {show ? '隐藏' : '显示'}
                     </button>
-                    {settings.hasApiKey && (
+                    {settings.accountKeys[account.id] && (
                       <button type="button" className="sm" onClick={() => setClearKey(!clearKey)}>
                         {clearKey ? '撤销' : '清除'}
                       </button>
@@ -286,10 +450,9 @@ export function SettingsModal({ settings, onSave, onClose, onPreview, onRelocate
                   Base URL
                   <input
                     name="baseUrl"
-                    value={s.baseUrl}
+                    value={account.baseUrl}
                     onChange={(e) => {
-                      set('baseUrl', e.target.value);
-                      setModels(null);
+                      patchAccount(account.id, { baseUrl: e.target.value, models: [] });
                       setModelsError('');
                     }}
                   />
@@ -297,20 +460,25 @@ export function SettingsModal({ settings, onSave, onClose, onPreview, onRelocate
                 <label>
                   模型名称
                   <div className="row">
-                    <input name="model" value={s.model} onChange={(e) => set('model', e.target.value)} />
+                    <input name="model" value={account.model} onChange={(e) => patchAccount(account.id, { model: e.target.value })} />
                     <button type="button" className="sm" onClick={() => void pullModels()} disabled={listing} data-testid="list-models">
                       {listing ? '拉取中…' : '拉取模型'}
                     </button>
                   </div>
                 </label>
                 {modelsError && <div className="field-error">{modelsError}</div>}
-                {!!models?.length && (
+                {!!account.models.length && (
                   <div className="model-list" data-testid="model-list">
-                    {models.map((id) => (
-                      <button type="button" key={id} className={id === s.model ? 'active' : ''} onClick={() => set('model', id)}>
+                    {account.models.map((id) => (
+                      <button type="button" key={id} className={id === account.model ? 'active' : ''} onClick={() => patchAccount(account.id, { model: id })}>
                         {id}
                       </button>
                     ))}
+                  </div>
+                )}
+                {account.id !== s.activeProviderId && (
+                  <div className="row">
+                    <button type="button" className="sm" onClick={useAccount}>用于对话</button>
                   </div>
                 )}
                 <label>
@@ -329,7 +497,13 @@ export function SettingsModal({ settings, onSave, onClose, onPreview, onRelocate
                   <textarea rows={3} value={s.systemPrompt} onChange={(e) => set('systemPrompt', e.target.value)} />
                 </label>
               </>
-            )}
+                ) : (
+                  <p className="hint">还没有云端提供商。点「添加」新建一个。</p>
+                )}
+              </>
+                )}
+              </>
+            ) : null}
           </div>
           <div className="modal-foot">
             <button type="button" onClick={onClose}>

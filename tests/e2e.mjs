@@ -14,10 +14,13 @@ const userData = process.env.BRANCHCHAT_USER_DATA || mkdtempSync(join(tmpdir(), 
 const exe = process.env.APP_EXECUTABLE;
 const electronPath = createRequire(import.meta.url)('electron');
 
+const launchEnv = { ...process.env, BRANCHCHAT_USER_DATA: userData };
+delete launchEnv.ELECTRON_RUN_AS_NODE;
+
 const app = await electron.launch({
   executablePath: exe || electronPath,
   args: [...(exe ? [] : ['.']), '--no-sandbox'],
-  env: { ...process.env, BRANCHCHAT_USER_DATA: userData },
+  env: launchEnv,
 });
 const page = await app.firstWindow();
 await page.setViewportSize?.({ width: 1440, height: 900 });
@@ -73,6 +76,9 @@ const waitIdle = () =>
 const nodeCount = () => page.locator('[data-testid=tree] .tree-node').count();
 
 await page.waitForSelector('.app');
+await page.waitForSelector('[data-testid=attach-file]');
+await page.waitForSelector('[data-testid=composer-tag]');
+step('composer has file upload and a single model tag');
 // Security: renderer has no Node, only the preload API
 assert.equal(await page.evaluate(() => typeof window.require), 'undefined');
 assert.equal(await page.evaluate(() => typeof window.api?.chat?.start), 'function');
@@ -86,6 +92,8 @@ await page.fill('input[name=baseUrl]', `${MOCK}/v1`);
 await page.fill('input[name=model]', 'mock-model');
 await page.click('.modal button.primary');
 await page.waitForSelector('.modal', { state: 'detached' });
+assert.equal(await page.locator('[data-testid=route-tag]').count(), 0);
+assert.match(await page.locator('[data-testid=composer-tag]').innerText(), /mock-model/);
 step('settings saved');
 
 // Root question, streamed
@@ -216,6 +224,54 @@ await page.click('[data-testid=settings-provider]');
 await page.selectOption('.modal select', 'openai');
 await page.click('.modal button.primary');
 await page.waitForSelector('.modal', { state: 'detached' });
+
+await page.fill('.composer textarea', '请核对 LATEXCHECK');
+await page.keyboard.press('Enter');
+await waitIdle();
+assert.ok((await page.locator('.msg-assistant .katex').count()) >= 2);
+step('latex in the answer is rendered');
+
+await page.click('[data-testid=open-settings]');
+await page.click('[data-testid=settings-provider]');
+await page.waitForSelector('.modal select');
+await page.click('[data-testid=settings-cli]');
+await page.waitForSelector('.modal select', { state: 'detached' });
+const cliText = await page.locator('.settings-body').innerText();
+assert.match(cliText, /Claude Code/);
+assert.match(cliText, /Codex/);
+assert.match(cliText, /Grok/);
+await page.click('[data-testid=settings-network]');
+await page.waitForSelector('.modal select');
+assert.equal(await page.locator('.modal select').count(), 1);
+assert.equal(await page.locator('input[name=apiKey]').count(), 1);
+assert.match(cliText, /拉取模型/);
+assert.ok((await page.locator('.account-x').count()) >= 1);
+await page.locator('.account-bar button', { hasText: '添加' }).click();
+assert.equal(await page.locator('.modal select').count(), 1);
+assert.equal(await page.locator('input[name=apiKey]').count(), 1);
+assert.equal(await page.locator('input[name=model]').count(), 1);
+assert.ok((await page.locator('.account-bar .chip').count()) >= 3);
+await page.locator('.account-x').last().click();
+assert.equal(await page.locator('.account-chip').count(), 1);
+assert.equal(await page.locator('.modal select').count(), 1);
+await page.click('.modal-foot button:not(.primary)');
+await page.waitForSelector('.modal', { state: 'detached' });
+step('local CLI page lists Claude Code, Codex and Grok');
+
+await page.click('[data-testid=composer-tag]');
+await page.click('[data-testid=composer-model]');
+await page.waitForSelector('[data-testid=composer-model-list]');
+const modelList = await page.locator('[data-testid=composer-model-list]').innerText();
+assert.match(modelList, /mock-model/);
+assert.equal(await page.locator('[data-testid=route-tag]').count(), 0);
+step('model menu lists the cloud model without a separate route tag');
+
+const codexModel = page.locator('[data-testid=composer-model-list] button', { hasText: 'gpt-6.1-sol' });
+if (await codexModel.count()) {
+  await codexModel.first().click();
+  await page.waitForFunction(() => /272k/.test(document.querySelector('[data-testid=context-usage]')?.textContent || ''));
+  step('codex model shows its context limit');
+}
 
 await app.close();
 console.log('ALL TESTS PASSED');

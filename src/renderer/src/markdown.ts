@@ -2,6 +2,8 @@ import { Marked } from 'marked';
 import { markedHighlight } from 'marked-highlight';
 import hljs from 'highlight.js/lib/common';
 import DOMPurify from 'dompurify';
+import katex from 'katex';
+import { mathPlaceholder, shieldMath } from '../../shared/math';
 
 const marked = new Marked(
   markedHighlight({
@@ -14,8 +16,23 @@ const marked = new Marked(
   { gfm: true, breaks: true },
 );
 
+function renderMath(tex: string, display: boolean): string {
+  try {
+    return katex.renderToString(tex, { displayMode: display, throwOnError: false, output: 'html' });
+  } catch {
+    const escaped = tex.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch] ?? ch);
+    return `<span class="math-error">${escaped}</span>`;
+  }
+}
+
 export function renderMarkdown(src: string): string {
-  return DOMPurify.sanitize(marked.parse(src, { async: false }) as string);
+  const shielded = shieldMath(src);
+  const html = marked.parse(shielded.text, { async: false }) as string;
+  const withMath = shielded.blocks.reduce((out, block, index) => {
+    const htmlMath = renderMath(block.tex, block.display);
+    return out.split(mathPlaceholder(index)).join(htmlMath);
+  }, html);
+  return DOMPurify.sanitize(withMath, { ADD_ATTR: ['style', 'aria-hidden', 'encoding'] });
 }
 
 /** Wrap the character range [start, end) of root's text content in <mark> elements */

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { AppData, ChatNode, Message, ModelInfo, Session, Settings, SettingsState, SettingsUpdate } from '../../shared/types';
+import type { AppData, ChatNode, CliInfo, FileAttachment, Message, ModelInfo, Session, Settings, SettingsState, SettingsUpdate } from '../../shared/types';
 import { toSettings } from '../../shared/types';
 import { contextBreakdown, formatTokenCount, resolveContextWindow } from '../../shared/usage';
 import { applyAppearance } from './appearance';
@@ -7,7 +7,8 @@ import { buildContext, childrenOf, COMPACT_ASK, descendantIds, pathTo } from '..
 import { streamChat } from './chatClient';
 import { rangeOffsets } from './markdown';
 import { truncate, uid } from './util';
-import { ComposerPick, EFFORT_LABEL } from './components/ComposerPick';
+import { modelGroups } from '../../shared/modelCatalog';
+import { ComposerPick, EFFORT_LABEL, type ModelPick } from './components/ComposerPick';
 import { ContextUsage } from './components/ContextUsage';
 import { MessageView } from './components/MessageView';
 import { TreePanel } from './components/TreePanel';
@@ -57,15 +58,25 @@ export default function App({ initialData, initialSettings }: AppProps) {
   }, [settings]);
   const [catalog, setCatalog] = useState<ModelInfo[]>([]);
   const loadGen = useRef(0);
+  const settingsGen = useRef(0);
   const saveChain = useRef(Promise.resolve());
+  const persistSettings = (update: SettingsUpdate) => {
+    const gen = ++settingsGen.current;
+    const run = saveChain.current.catch(() => undefined).then(() => window.api.settings.save(update));
+    saveChain.current = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run.then((saved) => ({ saved, gen }));
+  };
   const reloadModels = useCallback(() => {
     const gen = ++loadGen.current;
-    const { provider, baseUrl, hasApiKey } = settingsRef.current;
+    const { provider, baseUrl, hasApiKey, activeProviderId } = settingsRef.current;
     if (!hasApiKey && !/localhost|127\.0\.0\.1/.test(baseUrl)) {
       setCatalog([]);
       return;
     }
-    void window.api.models.list({ provider, baseUrl }).then(
+    void window.api.models.list({ provider, baseUrl, accountId: activeProviderId }).then(
       (list) => {
         if (loadGen.current !== gen) return;
         setCatalog(list);
@@ -81,25 +92,32 @@ export default function App({ initialData, initialSettings }: AppProps) {
     settingsRef.current = next;
     setSettings(next);
     const payload = toSettings(next);
-    saveChain.current = saveChain.current
-      .catch(() => undefined)
-      .then(() => window.api.settings.save({ settings: payload }))
-      .then((saved) => {
-        setSettings((cur) => (cur.model === payload.model && cur.thinkingEffort === payload.thinkingEffort ? saved : cur));
-      });
+    void persistSettings({ settings: payload }).then(({ saved, gen }) => {
+      if (settingsGen.current !== gen) return;
+      settingsRef.current = saved;
+      setSettings(saved);
+    });
   };
   useEffect(() => {
     reloadModels();
-  }, [settings.provider, settings.baseUrl, settings.hasApiKey, reloadModels]);
+  }, [settings.provider, settings.baseUrl, settings.hasApiKey, settings.activeProviderId, reloadModels]);
   const [showSettings, setShowSettings] = useState(false);
   const [showTree, setShowTree] = useState(true);
   const [input, setInput] = useState('');
   const [pickOpen, setPickOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [cliTools, setCliTools] = useState<CliInfo[] | null>(null);
+  const [cliWindows, setCliWindows] = useState<Record<string, number>>({});
+  const [files, setFiles] = useState<FileAttachment[]>([]);
+  const [attachError, setAttachError] = useState('');
   const [compacting, setCompacting] = useState(false);
   const [compactError, setCompactError] = useState('');
   const tagRef = useRef<HTMLDivElement>(null);
   const usageRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    void window.api.cli.list().then(setCliTools).catch(() => setCliTools([]));
+    void window.api.cli.windows().then(setCliWindows).catch(() => undefined);
+  }, []);
   useEffect(() => {
     if (!pickOpen && !usageOpen) return;
     const down = (e: MouseEvent) => {
@@ -169,16 +187,43 @@ export default function App({ initialData, initialSettings }: AppProps) {
     () => Object.values(data.sessions).sort((a, b) => b.updatedAt - a.updatedAt),
     [data.sessions],
   );
-  const modelOptions = useMemo(() => {
-    const ids = catalog.map((m) => m.id);
-    if (settings.model && !ids.includes(settings.model)) return [settings.model, ...ids];
-    return ids.length ? ids : [settings.model].filter(Boolean);
-  }, [catalog, settings.model]);
+  const groups = useMemo(() => {
+    const configured: Partial<Record<CliInfo['id'], string>> = {};
+    const installed: Partial<Record<CliInfo['id'], boolean>> = {};
+    for (const tool of cliTools ?? []) {
+      configured[tool.id] = tool.model;
+      installed[tool.id] = tool.installed;
+    }
+    return modelGroups({
+      accounts: settings.accounts,
+      extraByAccount: { [settings.activeProviderId]: catalog.map((item) => item.id) },
+      cliModels: settings.cliModels,
+      cliConfigured: configured,
+      cliInstalled: installed,
+    });
+  }, [catalog, cliTools, settings.accounts, settings.activeProviderId, settings.cliModels]);
+  const chooseModel = (pick: ModelPick) => {
+    if (pick.route === 'api' && pick.providerId) {
+      const account = settingsRef.current.accounts.find((item) => item.id === pick.providerId);
+      patchSettings({
+        route: 'api',
+        model: pick.model,
+        activeProviderId: pick.providerId,
+        provider: account?.provider ?? settingsRef.current.provider,
+        baseUrl: account?.baseUrl ?? settingsRef.current.baseUrl,
+        accounts: settingsRef.current.accounts.map((item) => (item.id === pick.providerId ? { ...item, model: pick.model } : item)),
+      });
+      return;
+    }
+    patchSettings({ route: pick.route, model: pick.model });
+  };
   const contextUsage = useMemo(() => {
     const messages = node ? buildContext(data.nodes, node.id) : [];
     const draft = input.trim();
     const { parts, used } = contextBreakdown(settings.systemPrompt, messages, draft);
-    const reported = catalog.find((m) => m.id === settings.model)?.contextWindow ?? null;
+    const reported = settings.route === 'api'
+      ? catalog.find((m) => m.id === settings.model)?.contextWindow ?? null
+      : cliWindows[settings.model] ?? null;
     const limit = resolveContextWindow(settings.model, reported);
     const ratio = limit ? used / limit : 0;
     const level: 'ok' | 'warn' | 'hot' | 'none' = !limit ? 'none' : ratio >= 0.9 ? 'hot' : ratio >= 0.7 ? 'warn' : 'ok';
@@ -194,7 +239,7 @@ export default function App({ initialData, initialSettings }: AppProps) {
     if (draftTokens > 0) rows.push({ id: 'draft', label: '草稿', tokens: draftTokens });
     if (limit) rows.push({ id: 'free', label: '剩余', tokens: Math.max(0, limit - used) });
     return { used, limit, level, label, compact, messages, rows };
-  }, [catalog, data.nodes, input, node, settings.model, settings.systemPrompt]);
+  }, [catalog, cliWindows, data.nodes, input, node, settings.model, settings.route, settings.systemPrompt]);
 
   const navigate = useCallback(
     (nodeId: string, flash?: string) => {
@@ -246,6 +291,7 @@ export default function App({ initialData, initialSettings }: AppProps) {
         commit((d) => patchMessage(d, nodeId, msgId, (m) => ({ ...m, content: m.content + chunk })));
       };
       try {
+        await saveChain.current;
         await streamChat(
           ctx,
           (t) => {
@@ -253,6 +299,8 @@ export default function App({ initialData, initialSettings }: AppProps) {
             if (!raf) raf = requestAnimationFrame(flush);
           },
           ac.signal,
+          undefined,
+          settingsRef.current.route,
         );
         if (raf) cancelAnimationFrame(raf);
         flush();
@@ -282,6 +330,7 @@ export default function App({ initialData, initialSettings }: AppProps) {
   );
 
   const ensureKey = () => {
+    if (settingsRef.current.route !== 'api') return true;
     if (!settingsRef.current.hasApiKey && !/localhost|127\.0\.0\.1/.test(settingsRef.current.baseUrl)) {
       setShowSettings(true);
       return false;
@@ -307,25 +356,49 @@ export default function App({ initialData, initialSettings }: AppProps) {
 
   const send = (text: string) => {
     const t = text.trim();
-    if (!t || compacting || !ensureKey()) return;
+    const attached = files;
+    if ((!t && attached.length === 0) || compacting || !ensureKey()) return;
     let nodeId = dataRef.current.currentNodeId;
     if (!nodeId || !dataRef.current.nodes[nodeId]) nodeId = newSession();
     if (streaming.has(nodeId)) return;
-    const msg: Message = { id: uid(), role: 'user', content: t, status: 'done', createdAt: Date.now() };
+    const titleSource = t || attached[0]?.name || '附件';
+    const msg: Message = {
+      id: uid(),
+      role: 'user',
+      content: t,
+      files: attached.length ? attached : undefined,
+      status: 'done',
+      createdAt: Date.now(),
+    };
     commit((d) => {
       let next = patchNode(d, nodeId!, (n) => ({
         ...n,
-        title: !n.parentId && n.messages.length === 0 ? truncate(t, 30) : n.title,
+        title: !n.parentId && n.messages.length === 0 ? truncate(titleSource, 30) : n.title,
         messages: [...n.messages, msg],
       }));
       const n = next.nodes[nodeId!];
       const s = next.sessions[n.sessionId];
-      if (!n.parentId && s && s.title === '新对话') next = { ...next, sessions: { ...next.sessions, [s.id]: { ...s, title: truncate(t, 30) } } };
+      if (!n.parentId && s && s.title === '新对话') next = { ...next, sessions: { ...next.sessions, [s.id]: { ...s, title: truncate(titleSource, 30) } } };
       return next;
     });
     setInput('');
+    setFiles([]);
+    setAttachError('');
     stickBottom.current = true;
     generate(nodeId);
+  };
+
+  const attachFiles = async () => {
+    setAttachError('');
+    try {
+      const picked = await window.api.files.pick();
+      if (!picked?.length) return;
+      if (files.length + picked.length > 8) setAttachError('一次最多添加 8 个文件');
+      setFiles((cur) => [...cur, ...picked].slice(0, 8));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setAttachError(msg.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+    }
   };
 
   const createBranch = (sel: PendingSelection) => {
@@ -518,6 +591,7 @@ export default function App({ initialData, initialSettings }: AppProps) {
     setCompactError('');
     let summary = '';
     try {
+      await saveChain.current;
       await streamChat(
         [...messages, { role: 'user', content: COMPACT_ASK }],
         (t) => {
@@ -665,6 +739,18 @@ export default function App({ initialData, initialSettings }: AppProps) {
         >
           <div className="composer-box">
             <span className="prompt-mark" aria-hidden="true">&gt;</span>
+            {files.length > 0 && (
+              <div className="file-chips">
+                {files.map((file, index) => (
+                  <span className="file-chip" key={`${file.name}-${index}`}>
+                    <span>{file.name}</span>
+                    <button type="button" aria-label={`移除 ${file.name}`} onClick={() => setFiles((cur) => cur.filter((_, i) => i !== index))}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -689,9 +775,10 @@ export default function App({ initialData, initialSettings }: AppProps) {
                     onClick={() => {
                       setUsageOpen(false);
                       setPickOpen((v) => !v);
+                      void window.api.cli.list().then(setCliTools).catch(() => setCliTools([]));
                     }}
                   >
-                    <span className="composer-tag-name">{settings.model}</span>
+                    <span className="composer-tag-name">{settings.model || '选择模型'}</span>
                     <span className={`composer-tag-effort ${settings.thinkingEffort === 'off' ? '' : 'on'}`}>
                       {EFFORT_LABEL[settings.thinkingEffort]}
                     </span>
@@ -700,9 +787,11 @@ export default function App({ initialData, initialSettings }: AppProps) {
                     <div className="composer-pop">
                       <ComposerPick
                         model={settings.model}
-                        models={modelOptions}
+                        route={settings.route}
+                        providerId={settings.activeProviderId}
+                        groups={groups}
                         effort={settings.thinkingEffort}
-                        onModel={(model) => patchSettings({ model })}
+                        onModel={chooseModel}
                         onEffort={(thinkingEffort) => patchSettings({ thinkingEffort })}
                       />
                     </div>
@@ -740,14 +829,18 @@ export default function App({ initialData, initialSettings }: AppProps) {
                     </div>
                   )}
                 </div>
+                <button type="button" className="sm" data-testid="attach-file" onClick={() => void attachFiles()}>
+                  上传
+                </button>
               </div>
               {isStreaming ? (
                 <button type="button" className="danger" onClick={() => stop(node!.id)}>停止</button>
               ) : (
-                <button type="submit" className="primary" disabled={!input.trim() || compacting}>发送</button>
+                <button type="submit" className="primary" disabled={(!input.trim() && files.length === 0) || compacting}>发送</button>
               )}
             </div>
           </div>
+          {attachError && <p className="field-error">{attachError}</p>}
         </form>
       </main>
 
@@ -821,7 +914,11 @@ export default function App({ initialData, initialSettings }: AppProps) {
           }}
           onSave={async (u: SettingsUpdate) => {
             try {
-              setSettings(await window.api.settings.save(u));
+              const { saved, gen } = await persistSettings(u);
+              if (settingsGen.current === gen) {
+                settingsRef.current = saved;
+                setSettings(saved);
+              }
               setShowSettings(false);
             } catch (e: any) {
               alert('保存失败：' + (e?.message || e));

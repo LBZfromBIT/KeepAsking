@@ -1,4 +1,4 @@
-import type { ApiMessage, ChatNode, Message } from './types';
+import type { ApiMessage, ChatNode, FileAttachment, Message } from './types';
 
 export const COMPACT_SYSTEM = '你负责压缩对话上下文。只输出摘要正文，不要标题、寒暄或代码围栏。';
 
@@ -12,13 +12,21 @@ export function compactContent(summary: string): string {
   return COMPACT_PREFIX + summary.trim();
 }
 
+function fileBlock(files: FileAttachment[] | undefined): string {
+  if (!files?.length) return '';
+  return files.map((file) => `【附件：${file.name}】\n${file.text}`).join('\n\n');
+}
+
 export function toApiContent(m: Message): string {
+  const files = fileBlock(m.files);
   if (m.role === 'user' && m.quote !== undefined) {
     const q = m.quote.split('\n').map((l) => '> ' + l).join('\n');
     const ask = m.content.trim() || '请针对这段内容展开详细解释。';
-    return `我想就上文中的这段内容深入展开：\n\n${q}\n\n${ask}`;
+    const body = `我想就上文中的这段内容深入展开：\n\n${q}\n\n${ask}`;
+    return files ? `${body}\n\n${files}` : body;
   }
-  return m.content;
+  if (!m.content.trim() && files) return files;
+  return files ? `${m.content.trim()}\n\n${files}` : m.content;
 }
 
 function toApi(msgs: Message[]): ApiMessage[] {

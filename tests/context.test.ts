@@ -111,6 +111,19 @@ describe('buildContext', () => {
   });
 });
 
+describe('attachments', () => {
+  it('appends file text to the user message sent to the model', () => {
+    const content = toApiContent(msg('u', 'user', '看一下', { files: [{ name: 'note.txt', text: 'hello' }] }));
+    expect(content).toContain('看一下');
+    expect(content).toContain('【附件：note.txt】');
+    expect(content).toContain('hello');
+  });
+
+  it('sends the file alone when the user did not type', () => {
+    expect(toApiContent(msg('u', 'user', '', { files: [{ name: 'a.md', text: '# 标题' }] }))).toBe('【附件：a.md】\n# 标题');
+  });
+});
+
 describe('tree helpers', () => {
   it('pathTo walks from root', () => {
     expect(pathTo(fixture(), 'b2').map((n) => n.id)).toEqual(['root', 'b1', 'b2']);

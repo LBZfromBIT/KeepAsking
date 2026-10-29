@@ -18,6 +18,11 @@ describe('context usage', () => {
     expect(formatTokenCount(1800)).toBe('1.8k');
     expect(formatTokenCount(128000)).toBe('128k');
     expect(resolveContextWindow('gpt-4o-mini', null)).toBe(128000);
+    expect(resolveContextWindow('gpt-6.1-sol', null)).toBe(272000);
+    expect(resolveContextWindow('gpt-daybreak-red-latest', null)).toBe(372000);
+    expect(resolveContextWindow('claude-opus-5-5[1M]', null)).toBe(1000000);
+    expect(resolveContextWindow('claude-haiku-4-5', null)).toBe(200000);
+    expect(resolveContextWindow('grok-4.7', null)).toBe(131072);
     expect(resolveContextWindow('custom-model', 32000)).toBe(32000);
     expect(resolveContextWindow('custom-model', null)).toBeNull();
   });

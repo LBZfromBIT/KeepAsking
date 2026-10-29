@@ -1,4 +1,4 @@
-import type { ApiMessage } from '../../shared/types';
+import type { ApiMessage, ChatRoute } from '../../shared/types';
 import { uid } from './util';
 
 /** Stream a chat completion through the main process (no CORS, key never reaches the renderer). */
@@ -7,6 +7,7 @@ export function streamChat(
   onDelta: (t: string) => void,
   signal: AbortSignal,
   purpose?: 'compact',
+  route?: ChatRoute,
 ): Promise<void> {
   const requestId = uid();
   return new Promise<void>((resolve, reject) => {
@@ -24,7 +25,7 @@ export function streamChat(
       }
     });
     signal.addEventListener('abort', () => window.api.chat.abort(requestId), { once: true });
-    window.api.chat.start({ requestId, messages, purpose }).catch((e) => {
+    window.api.chat.start({ requestId, messages, purpose, route }).catch((e) => {
       off();
       reject(e);
     });

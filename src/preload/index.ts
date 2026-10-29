@@ -24,6 +24,14 @@ const api: BranchChatApi = {
   models: {
     list: (req) => ipcRenderer.invoke('models:list', req),
   },
+  cli: {
+    list: () => ipcRenderer.invoke('cli:list'),
+    models: (id) => ipcRenderer.invoke('cli:models', id),
+    windows: () => ipcRenderer.invoke('cli:windows'),
+  },
+  files: {
+    pick: () => ipcRenderer.invoke('files:pick'),
+  },
   chat: {
     start: (req) => ipcRenderer.invoke('chat:start', req),
     abort: (id) => ipcRenderer.send('chat:abort', id),

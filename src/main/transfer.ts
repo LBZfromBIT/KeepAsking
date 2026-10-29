@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const DATA_FILES = ['data.json', 'settings.json', 'apikey.bin'] as const;
+export const DATA_FILES = ['data.json', 'settings.json', 'apikey.bin', 'provider-keys.bin'] as const;
 
 /** Copy the data files. The caller deletes the sources only after the new location is recorded. */
 export function transferDataFiles(from: string, to: string): string[] {

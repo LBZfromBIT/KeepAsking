@@ -67,6 +67,15 @@ function MessageViewImpl({ message, branches, probes, onOpenBranch, onOpenProbe,
     <div className={`msg msg-${message.role}`} data-turn-id={isUser ? message.id : undefined}>
       <div className="msg-main">
         <div className="msg-kicker">{isUser ? '你' : '助手'}</div>
+        {!!message.files?.length && (
+          <div className="file-chips">
+            {message.files.map((file, index) => (
+              <span className="file-chip" key={`${file.name}-${index}`}>
+                <span>{file.name}</span>
+              </span>
+            ))}
+          </div>
+        )}
         {message.quote !== undefined && (
           <div className="msg-quote" title={message.quote}>
             <span className="msg-quote-label">引用</span>
@@ -75,7 +84,7 @@ function MessageViewImpl({ message, branches, probes, onOpenBranch, onOpenProbe,
         )}
         {isUser && !message.content.trim() && message.quote !== undefined ? (
           <div className="msg-body msg-muted">请针对这段内容展开详细解释</div>
-        ) : (
+        ) : message.content.trim() || !isUser ? (
           <div
             className="msg-body markdown"
             data-message-id={message.id}
@@ -83,7 +92,7 @@ function MessageViewImpl({ message, branches, probes, onOpenBranch, onOpenProbe,
             onMouseDown={onMouseDown}
             onClick={onClick}
           />
-        )}
+        ) : null}
         {message.status === 'streaming' && !message.content && <Thinking />}
         {message.status === 'error' && <div className="msg-error">{message.error || '请求失败'}</div>}
         <div className="msg-actions">

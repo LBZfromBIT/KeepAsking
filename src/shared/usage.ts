@@ -75,6 +75,9 @@ export function estimateContextTokens(systemPrompt: string, messages: Pick<ApiMe
 }
 
 const KNOWN_WINDOWS: { re: RegExp; tokens: number }[] = [
+  { re: /\[1m\]/i, tokens: 1_000_000 },
+  { re: /gpt-daybreak-red/i, tokens: 372_000 },
+  { re: /gpt-(?:5|6)(?:[.\-]|$)|gpt-daybreak|codex-auto-review/i, tokens: 272_000 },
   { re: /gpt-4\.1/i, tokens: 1_047_576 },
   { re: /gpt-4o/i, tokens: 128_000 },
   { re: /gpt-4-turbo|gpt-4-1106|gpt-4-0125/i, tokens: 128_000 },

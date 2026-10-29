@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { applyAppearance } from './appearance';
+import 'katex/dist/katex.min.css';
 import './styles.css';
 
 applyAppearance(window.api.settings.peek());
